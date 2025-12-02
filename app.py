@@ -112,32 +112,174 @@ def get_conn():
 
 def init_db():
     """
-    For SQLite: create tables if not exist.
-    For Neon: only test connectivity (assume schema already created).
+    Full DB initializer with auto-migration.
+    Works for:
+    - SQLite local file
+    - Neon PostgreSQL (cloud)
+    Automatically adds missing columns and creates tables safely.
     """
+
     os.makedirs(INVOICE_BASE_DIR, exist_ok=True)
 
-    # Neon: just connectivity check
-    if USE_NEON and NEON_URL:
-        try:
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.execute("SELECT 1")
-            conn.close()
-            st.session_state["db_ready"] = True
-        except Exception as e:
-            st.error("❌ Failed to connect to Neon DB in init_db.")
-            st.error(str(e))
-            st.session_state["db_ready"] = False
-        return
-
-    # SQLite schema
     conn = get_conn()
     cur = conn.cursor()
 
-    # Projects
-    cur.execute(
-        """
+    # ============================================================
+    # ===============  POSTGRES / NEON MODE ======================
+    # ============================================================
+    if USE_NEON and NEON_URL:
+        # ---------- Projects ----------
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS projects (
+                id SERIAL PRIMARY KEY,
+                project_code TEXT UNIQUE,
+                name TEXT,
+                client_name TEXT,
+                location TEXT,
+                contract_value NUMERIC(18,2) DEFAULT 0,
+                start_date DATE,
+                status TEXT,
+                project_type TEXT DEFAULT 'Other'
+            );
+        """)
+
+        # ---------- Cash Book ----------
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS cash_book (
+                id SERIAL PRIMARY KEY,
+                date DATE,
+                project_code TEXT,
+                description TEXT,
+                method TEXT,
+                ref_no TEXT,
+                debit NUMERIC(18,2) DEFAULT 0,
+                credit NUMERIC(18,2) DEFAULT 0,
+                account_type TEXT,
+                remarks TEXT
+            );
+        """)
+
+        # Auto-migrate cash_book
+        for col in ["ref_no TEXT", "account_type TEXT", "remarks TEXT"]:
+            try:
+                cur.execute(f"ALTER TABLE cash_book ADD COLUMN IF NOT EXISTS {col};")
+            except:
+                pass
+
+        # ---------- Invoices ----------
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS invoices (
+                id SERIAL PRIMARY KEY,
+                invoice_no TEXT,
+                date DATE,
+                project_code TEXT,
+                client_name TEXT,
+                description TEXT,
+                amount NUMERIC(18,2),
+                status TEXT,
+                remarks TEXT
+            );
+        """)
+
+        # ---------- Debts & Fixed Assets ----------
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS debts_fixed (
+                id SERIAL PRIMARY KEY,
+                type TEXT,
+                name TEXT,
+                project_code TEXT,
+                amount NUMERIC(18,2),
+                start_date DATE,
+                remarks TEXT
+            );
+        """)
+
+        # ---------- People ----------
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS people (
+                id SERIAL PRIMARY KEY,
+                emp_code TEXT,
+                name TEXT,
+                position TEXT,
+                project_code TEXT,
+                basic_salary NUMERIC(18,2),
+                allowance NUMERIC(18,2),
+                is_active INTEGER DEFAULT 1
+            );
+        """)
+
+        # ---------- Visas ----------
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS visas (
+                id SERIAL PRIMARY KEY,
+                emp_code TEXT,
+                name TEXT,
+                visa_no TEXT,
+                issue_date DATE,
+                expiry_date DATE,
+                cost NUMERIC(18,2),
+                project_code TEXT
+            );
+        """)
+
+        # ---------- Tickets ----------
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tickets (
+                id SERIAL PRIMARY KEY,
+                emp_code TEXT,
+                name TEXT,
+                from_city TEXT,
+                to_city TEXT,
+                travel_date DATE,
+                cost NUMERIC(18,2),
+                project_code TEXT
+            );
+        """)
+
+        # ---------- Accounts ----------
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS accounts (
+                id SERIAL PRIMARY KEY,
+                code TEXT UNIQUE,
+                name TEXT,
+                type TEXT
+            );
+        """)
+
+        # ---------- Journal ----------
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS journal (
+                id SERIAL PRIMARY KEY,
+                date DATE,
+                account_code TEXT,
+                description TEXT,
+                debit NUMERIC(18,2),
+                credit NUMERIC(18,2),
+                ref TEXT
+            );
+        """)
+
+        # Auto-migrate journal
+        for col in ["account_code TEXT", "ref TEXT"]:
+            try:
+                cur.execute(f"ALTER TABLE journal ADD COLUMN IF NOT EXISTS {col};")
+            except:
+                pass
+
+        conn.commit()
+        conn.close()
+        st.session_state["db_ready"] = True
+        return
+
+    # ============================================================
+    # ====================  SQLITE MODE ===========================
+    # ============================================================
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    # ---------- Projects ----------
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS projects (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             project_code TEXT UNIQUE,
@@ -148,31 +290,31 @@ def init_db():
             start_date TEXT,
             status TEXT,
             project_type TEXT DEFAULT 'Other'
-        )
-        """
-    )
+        );
+    """)
 
-    # Cash book
-    cur.execute(
-        """
+    # ---------- Cash Book ----------
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS cash_book (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT,
             project_code TEXT,
             description TEXT,
             method TEXT,
-            ref_no TEXT,
             debit REAL DEFAULT 0,
-            credit REAL DEFAULT 0,
-            account_type TEXT,
-            remarks TEXT
-        )
-        """
-    )
+            credit REAL DEFAULT 0
+        );
+    """)
 
-    # Invoices
-    cur.execute(
-        """
+    # Auto-migrate cash_book
+    for col in ["ref_no TEXT", "account_type TEXT", "remarks TEXT"]:
+        try:
+            cur.execute(f"ALTER TABLE cash_book ADD COLUMN {col};")
+        except:
+            pass
+
+    # ---------- Invoices ----------
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS invoices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             invoice_no TEXT,
@@ -183,28 +325,24 @@ def init_db():
             amount REAL,
             status TEXT,
             remarks TEXT
-        )
-        """
-    )
+        );
+    """)
 
-    # Debts & Fixed Assets
-    cur.execute(
-        """
+    # ---------- Debts ----------
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS debts_fixed (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            type TEXT,               -- 'Debt' or 'Fixed Asset'
+            type TEXT,
             name TEXT,
             project_code TEXT,
             amount REAL,
             start_date TEXT,
             remarks TEXT
-        )
-        """
-    )
+        );
+    """)
 
-    # People
-    cur.execute(
-        """
+    # ---------- People ----------
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS people (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             emp_code TEXT,
@@ -214,13 +352,11 @@ def init_db():
             basic_salary REAL,
             allowance REAL,
             is_active INTEGER DEFAULT 1
-        )
-        """
-    )
+        );
+    """)
 
-    # Visas
-    cur.execute(
-        """
+    # ---------- Visas ----------
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS visas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             emp_code TEXT,
@@ -230,13 +366,11 @@ def init_db():
             expiry_date TEXT,
             cost REAL,
             project_code TEXT
-        )
-        """
-    )
+        );
+    """)
 
-    # Tickets
-    cur.execute(
-        """
+    # ---------- Tickets ----------
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS tickets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             emp_code TEXT,
@@ -246,39 +380,40 @@ def init_db():
             travel_date TEXT,
             cost REAL,
             project_code TEXT
-        )
-        """
-    )
+        );
+    """)
 
-    # Accounts
-    cur.execute(
-        """
+    # ---------- Accounts ----------
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS accounts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             code TEXT UNIQUE,
             name TEXT,
             type TEXT
-        )
-        """
-    )
+        );
+    """)
 
-    # Journal
-    cur.execute(
-        """
+    # ---------- Journal ----------
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS journal (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT,
-            account_code TEXT,
             description TEXT,
             debit REAL,
-            credit REAL,
-            ref TEXT
-        )
-        """
-    )
+            credit REAL
+        );
+    """)
+
+    # Auto-migrate journal
+    for col in ["account_code TEXT", "ref TEXT"]:
+        try:
+            cur.execute(f"ALTER TABLE journal ADD COLUMN {col};")
+        except:
+            pass
 
     conn.commit()
     conn.close()
+
 
 
 # ========= UI THEME & HELPERS =========
@@ -1456,4 +1591,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
