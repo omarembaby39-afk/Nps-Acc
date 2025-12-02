@@ -340,13 +340,17 @@ def nps_page_header(title: str, subtitle: str, icon: str = "💼"):
 
 
 # ========= UTILITIES =========
-
 def df_from_query(sql: str, params: tuple = ()):
     conn = get_conn()
-    df = pd.read_sql_query(sql, conn, params=params)
-    conn.close()
-    return df
-
+    try:
+        df = pd.read_sql_query(sql, conn, params=params)
+        return df
+    except Exception as e:
+        st.error(f"❌ Database error while executing query:\n`{sql}`")
+        st.error(str(e))
+        return pd.DataFrame()
+    finally:
+        conn.close()
 
 def save_invoice_file(project_code: str, invoice_no: str, file: io.BytesIO, filename: str):
     if not project_code:
@@ -1097,16 +1101,23 @@ def page_visas():
     st.markdown("---")
     st.markdown("### 🛂 Visas List")
 
-    df = df_from_query(
-        "SELECT emp_code, name, visa_no, issue_date, expiry_date, cost, project_code "
-        "FROM visas ORDER BY expiry_date"
-    )
+    try:
+        df = df_from_query("SELECT * FROM visas ORDER BY expiry_date")
+    except:
+        df = pd.DataFrame()
+
     if df.empty:
         st.info("No visas yet.")
-    else:
-        df["issue_date"] = pd.to_datetime(df["issue_date"]).dt.date
-        df["expiry_date"] = pd.to_datetime(df["expiry_date"]).dt.date
-        st.dataframe(df, use_container_width=True)
+        return
+
+    for col in ["issue_date", "expiry_date"]:
+        if col in df.columns:
+            try:
+                df[col] = pd.to_datetime(df[col]).dt.date
+            except:
+                pass
+
+    st.dataframe(df, use_container_width=True)
 
 
 def page_tickets():
@@ -1445,3 +1456,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
