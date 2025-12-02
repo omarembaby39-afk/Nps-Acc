@@ -514,13 +514,25 @@ def page_dashboard():
     cash_df = df_from_query("SELECT * FROM cash_book")
     debts_df = df_from_query("SELECT * FROM debts_fixed")
 
-    total_invoices = inv_df["amount"].sum() if not inv_df.empty else 0.0
+    # ----- Total invoices (handle different column names) -----
+    if not inv_df.empty:
+        if "amount" in inv_df.columns:
+            total_invoices = inv_df["amount"].astype(float).sum()
+        elif "total_amount" in inv_df.columns:
+            total_invoices = inv_df["total_amount"].astype(float).sum()
+        else:
+            total_invoices = 0.0
+    else:
+        total_invoices = 0.0
+
     total_debit = cash_df["debit"].sum() if not cash_df.empty else 0.0
     total_credit = cash_df["credit"].sum() if not cash_df.empty else 0.0
     net_cash = total_debit - total_credit
 
     total_debts = (
-        debts_df.loc[debts_df["type"] == "Debt", "amount"].sum() if not debts_df.empty else 0.0
+        debts_df.loc[debts_df["type"] == "Debt", "amount"].sum()
+        if not debts_df.empty
+        else 0.0
     )
     total_assets = (
         debts_df.loc[debts_df["type"] == "Fixed Asset", "amount"].sum()
@@ -531,109 +543,36 @@ def page_dashboard():
     if total_assets > 0:
         debt_to_assets = total_debts / total_assets
     else:
-        debt_to_assets = None
+        debt_to_assets = 0.0
 
-    if total_debts > 0:
-        cash_coverage = net_cash / total_debts
-    else:
-        cash_coverage = None
+    col1, col2, col3, col4 = st.columns(4)
 
-    collection_ratio = None
-    if not inv_df.empty and "status" in inv_df.columns:
-        paid_mask = inv_df["status"].astype(str).str.lower().eq("paid")
-        paid_amount = inv_df.loc[paid_mask, "amount"].sum()
-        if total_invoices > 0:
-            collection_ratio = (paid_amount / total_invoices) * 100
-
-    st.markdown("### 💼 Key Financial Snapshot")
-
-    k1, k2, k3, k4 = st.columns(4)
-    with k1:
-        st.metric("💸 Total Invoices", f"{total_invoices:,.0f} IQD")
-    with k2:
-        st.metric("💰 Net Cash Balance", f"{net_cash:,.0f} IQD")
-    with k3:
-        st.metric("📉 Total Debts", f"{total_debts:,.0f} IQD")
-    with k4:
-        st.metric("🏗 Fixed Assets", f"{total_assets:,.0f} IQD")
-
-    st.markdown("### 📊 Ratios & Coverage")
-
-    r1, r2, r3 = st.columns(3)
-    with r1:
-        st.metric("⚖️ Debt / Assets", f"{debt_to_assets:,.2f}x" if debt_to_assets is not None else "N/A")
-    with r2:
-        st.metric("🧯 Cash Coverage", f"{cash_coverage:,.2f}x" if cash_coverage is not None else "N/A")
-    with r3:
-        st.metric("📈 Collection Ratio", f"{collection_ratio:,.1f}%" if collection_ratio is not None else "N/A")
-
-    st.markdown("### 🚨 Alerts & Warnings")
-
-    any_alert = False
-    if net_cash < 0:
-        any_alert = True
-        st.error("🔴 Net cash is negative – راجع الصرف والالتزامات النقدية.")
-    elif net_cash < total_debts and total_debts > 0:
-        any_alert = True
-        st.warning("🟠 Net cash أقل من إجمالي الديون – راجع خطة التحصيل.")
-
-    if debt_to_assets is not None and debt_to_assets > 1.0:
-        any_alert = True
-        st.warning("🟠 Debt/Assets ratio > 1 – الديون أعلى من الأصول الثابتة.")
-
-    if collection_ratio is not None and collection_ratio < 70:
-        any_alert = True
-        st.warning("🟠 Collection ratio أقل من 70% – تحصيل الفواتير ضعيف.")
-
-    if not any_alert:
-        st.success("✅ No major alerts detected – الوضع المالي مستقر حاليًا.")
+    with col1:
+        metric_card("Total Invoices", f"{total_invoices:,.2f}", "💰")
+    with col2:
+        metric_card("Net Cash", f"{net_cash:,.2f}", "💵")
+    with col3:
+        metric_card("Total Debts", f"{total_debts:,.2f}", "📉")
+    with col4:
+        metric_card("Fixed Assets", f"{total_assets:,.2f}", "🏗️")
 
     st.markdown("---")
 
-    st.markdown("### 📉 Monthly Cash Trend & Recent Activity")
+    col5, col6 = st.columns(2)
 
-    col_left, col_right = st.columns([2, 1])
-
-    with col_left:
-        if cash_df.empty:
-            st.info("No cash movements yet.")
+    with col5:
+        st.subheader("Cash Book (Last 20)")
+        if not cash_df.empty:
+            st.dataframe(cash_df.head(20))
         else:
-            cash_plot = cash_df.copy()
-            cash_plot["date"] = pd.to_datetime(cash_plot["date"])
-            cash_plot = (
-                cash_plot.groupby(pd.Grouper(key="date", freq="M"))[["debit", "credit"]]
-                .sum()
-                .reset_index()
-            )
-            cash_plot["month"] = cash_plot["date"].dt.to_period("M").astype(str)
-            cash_plot = cash_plot[["month", "debit", "credit"]]
-            st.bar_chart(
-                cash_plot.set_index("month")[["debit", "credit"]],
-                use_container_width=True,
-            )
+            st.info("No cash book entries yet.")
 
-    with col_right:
-        st.markdown("**🧾 Recent Invoices (Last 10)**")
-        if inv_df.empty:
+    with col6:
+        st.subheader("Invoices (Last 20)")
+        if not inv_df.empty:
+            st.dataframe(inv_df.head(20))
+        else:
             st.info("No invoices yet.")
-        else:
-            inv_view = inv_df.copy()
-            inv_view["date"] = pd.to_datetime(inv_view["date"]).dt.date
-            st.dataframe(
-                inv_view.sort_values("date", ascending=False).head(10),
-                use_container_width=True,
-            )
-
-        st.markdown("**💵 Recent Cash Movements (Last 10)**")
-        if cash_df.empty:
-            st.info("No cash entries yet.")
-        else:
-            cash_view = cash_df.copy()
-            cash_view["date"] = pd.to_datetime(cash_view["date"]).dt.date
-            st.dataframe(
-                cash_view.sort_values("date", ascending=False).head(10),
-                use_container_width=True,
-            )
 
 
 def page_owners_dashboard():
@@ -1600,6 +1539,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
