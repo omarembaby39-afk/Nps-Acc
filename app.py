@@ -1354,35 +1354,36 @@ def page_accounts():
     else:
         st.dataframe(df, use_container_width=True)
 
-
 def page_journal():
-    nps_page_header("Journal", "Manual journal entries", "📝")
+    nps_page_header("Journal Entries", "Debit / Credit Accounting Entries", "📋")
 
+    # -------------------- Add Entry Form --------------------
     with st.form("journal_form"):
         col1, col2 = st.columns(2)
         with col1:
-            jdate = st.date_input("Date", value=date.today())
+            date_val = st.date_input("Date", value=date.today())
             account_code = st.text_input("Account Code")
-            description = st.text_input("Description")
+            debit = st.number_input("Debit", min_value=0.0, step=1000.0)
         with col2:
-            debit = st.number_input("Debit", min_value=0.0, step=10000.0)
-            credit = st.number_input("Credit", min_value=0.0, step=10000.0)
-            ref = st.text_input("Ref / Document No")
+            ref = st.text_input("Reference No.")
+            credit = st.number_input("Credit", min_value=0.0, step=1000.0)
+            description = st.text_input("Description")
+
         submitted = st.form_submit_button("💾 Save Entry")
 
     if submitted:
         try:
             conn = get_conn()
             cur = conn.cursor()
+
+            # Insert dynamic fields — if some columns don't exist, SQLite/Neon will auto-append NULL
             cur.execute(
                 """
-                INSERT INTO journal (
-                    date, account_code, description, debit, credit, ref
-                )
+                INSERT INTO journal (date, account_code, description, debit, credit, ref)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    jdate.isoformat(),
+                    date_val.isoformat(),
                     account_code.strip() or None,
                     description.strip() or None,
                     float(debit),
@@ -1390,25 +1391,33 @@ def page_journal():
                     ref.strip() or None,
                 ),
             )
+
             conn.commit()
             conn.close()
-            st.success("✅ Journal entry saved.")
+            st.success("✅ Journal entry added.")
+
         except Exception as e:
             st.error("❌ Failed to save journal entry.")
             st.error(str(e))
 
     st.markdown("---")
-    st.markdown("### 📋 Journal Entries")
+    st.markdown("### 📋 Journal Entries List")
 
-    df = df_from_query(
-        "SELECT date, account_code, description, debit, credit, ref "
-        "FROM journal ORDER BY date DESC, id DESC"
-    )
+    # -------------------- Load Table --------------------
+    df = df_from_query("SELECT * FROM journal ORDER BY id DESC")
+
     if df.empty:
         st.info("No journal entries yet.")
-    else:
-        df["date"] = pd.to_datetime(df["date"]).dt.date
-        st.dataframe(df, use_container_width=True)
+        return
+
+    # Try convert date column if present
+    if "date" in df.columns:
+        try:
+            df["date"] = pd.to_datetime(df["date"]).dt.date
+        except:
+            pass
+
+    st.dataframe(df, use_container_width=True)
 
 
 def page_reports():
@@ -1591,5 +1600,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
